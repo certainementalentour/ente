@@ -13,7 +13,8 @@ on:
 
 jobs:
   build-ios:
-    runs-on: macos-latest
+    name: Build iOS 
+    runs-on: macos-14
 
     env:
       APP_PATH: mobile/apps/photos
@@ -37,6 +38,8 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          architecture: x64
 
       - name: Show Flutter and Xcode versions
         run: |
@@ -46,30 +49,58 @@ jobs:
 
       - name: Get Flutter dependencies
         working-directory: ${{ env.APP_PATH }}
-        run: flutter pub get
+        run: |
+          set -e
+          flutter pub get
 
       - name: Install CocoaPods
         run: |
+          set -e
           brew update || true
-          brew install cocoapods || sudo gem install cocoapods -N
+          brew install cocoapods || sudo gem install cocoapods -N || true
+          pod --version || true
 
       - name: Install iOS pods
         working-directory: ${{ env.APP_PATH }}/ios
         run: |
+          set -e
           pod repo update || true
-          pod install --verbose || arch -x86_64 pod install --verbose || (echo "::error::pod install failed" && exit 1)
+          pod install --verbose || \
+          # fallback for pods that need x86_64
+          arch -x86_64 pod install --verbose || \
+          (echo "::error::pod install failed" && exit 1)
 
       - name: Build IPA without codesign
         working-directory: ${{ env.APP_PATH }}
-        run: flutter build ipa --no-codesign --release
+        run: |
+          set -e
+          flutter build ipa --no-codesign --release -v 2>&1 | tee build_ipa.log || (tail -n build_ipa.log && exit 1)
+
+      - name: Debug dump (xcode/podfile/tree)
+        working-directory: ${{ env.APP_PATH }}/ios
+        run: |
+          set -e
+          echo "---- xcodebuild -version ----"
+          xcodebuild -version || true
+          echo "---- Podfile (head) ----"
+          head -n 200 Podfile || true
+          echo "---- project.pbxproj path ----"
+          find . -maxdepth 3 -type f -name project.pbxproj -print || true
+          echo "---- ios folder shallow listing ----"
+          find . -maxdepth 2 -print
 
       - name: Verify IPA exists
         run: |
-          if ls "${APP_PATH}/build/ios/ipa/"*.ipa 1> /dev/null 2>&1; then
-            ls -la "${APP_PATH}/build/ios/ipa/"
+          set -e
+          IPA_DIR="${APP_PATH}/build/ios/ipa"
+          if ls "${IPA_DIR}"/*.ipa 1> /dev/null 2>&1; then
+            echo "IPA found in ${IPA_DIR}:"
+            ls -la "${IPA_DIR}"
           else
-            echo "::error::No .ipa found in ${APP_PATH}/build/ios/ipa/"
+            echo "::error::No .ipa found in "${IPA_DIR}"
             ls -la "${APP_PATH}/build/ios/" || true
+            echo "Last lines of build_ipa.log (if present):"
+            [ -f "${APP_PATH}/build_ipa.log" ] && tail -n 200 "${APP_PATH}/build_ipa.log" || true
             exit 1
           fi
 
