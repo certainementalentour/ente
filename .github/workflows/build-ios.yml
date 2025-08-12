@@ -1,0 +1,80 @@
+name: Build iOS .ipa (no codesign)
+
+on:
+  workflow_dispatch:
+    inputs:
+      flutter_version:
+        description: 'Flutter version / channel (ex: stable or 3.14.0)'
+        required: true
+        default: 'stable'
+  push:
+    branches:
+      - main
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+
+    env:
+      APP_PATH: mobile/apps/photos
+
+    steps:
+      - name: Checkout repository (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set Flutter version
+        run: |
+          if [ -n "${{ github.event.inputs.flutter_version }}" ]; then
+            echo "FLUTTER_VERSION=${{ github.event.inputs.flutter_version }}" >> $GITHUB_ENV
+          else
+            echo "FLUTTER_VERSION=stable" >> $GITHUB_ENV
+          fi
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+
+      - name: Show Flutter and Xcode versions
+        run: |
+          flutter --version
+          flutter doctor -v
+          xcodebuild -version || true
+
+      - name: Get Flutter dependencies
+        working-directory: ${{ env.APP_PATH }}
+        run: flutter pub get
+
+      - name: Install CocoaPods
+        run: |
+          brew update || true
+          brew install cocoapods || sudo gem install cocoapods -N
+
+      - name: Install iOS pods
+        working-directory: ${{ env.APP_PATH }}/ios
+        run: |
+          pod repo update || true
+          pod install --verbose || arch -x86_64 pod install --verbose || (echo "::error::pod install failed" && exit 1)
+
+      - name: Build IPA without codesign
+        working-directory: ${{ env.APP_PATH }}
+        run: flutter build ipa --no-codesign --release
+
+      - name: Verify IPA exists
+        run: |
+          if ls "${APP_PATH}/build/ios/ipa/"*.ipa 1> /dev/null 2>&1; then
+            ls -la "${APP_PATH}/build/ios/ipa/"
+          else
+            echo "::error::No .ipa found in ${APP_PATH}/build/ios/ipa/"
+            ls -la "${APP_PATH}/build/ios/" || true
+            exit 1
+          fi
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ente-photos-ios-ipa
+          path: ${{ env.APP_PATH }}/build/ios/ipa/*.ipa
